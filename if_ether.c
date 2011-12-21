@@ -82,6 +82,7 @@ static	void arptfree __P((struct llinfo_arp *));
 static	void arptimer __P((void *));
 static	struct llinfo_arp *arplookup __P((u_long, int, int));
 static	void in_arpinput __P((struct mbuf *));
+static	struct sockaddr_dl *sock_malloc(sockaddr_dl *);
 
 extern	struct ifnet loif;
 extern	struct timeval time;
@@ -407,7 +408,7 @@ in_arpinput(m)
 	register struct llinfo_arp *la = 0;
 	register struct rtentry *rt;
 	struct in_ifaddr *ia, *maybe_ia = 0;
-	struct sockaddr_dl *sdl;
+	struct sockaddr_dl *sdl,*temp;
 	struct sockaddr sa;
 	struct in_addr isaddr, itaddr, myaddr;
 	int op;
@@ -443,7 +444,7 @@ in_arpinput(m)
 		itaddr = myaddr;
 		goto reply;
 	}
-	la = arplookup(isaddr.s_addr, itaddr.s_addr == myaddr.s_addr, 0);
+/*	la = arplookup(isaddr.s_addr, itaddr.s_addr == myaddr.s_addr, 0);
 	if (la && (rt = la->la_rt) && (sdl = SDL(rt->rt_gateway))) {
 		if (sdl->sdl_alen &&
 		    bcmp((caddr_t)ea->arp_sha, LLADDR(sdl), sdl->sdl_alen))
@@ -461,6 +462,43 @@ in_arpinput(m)
 			la->la_hold = 0;
 		}
 	}
+*/
+	la = arplookup(isaddr.s_addr, 0, 0);
+	if (la && (rt = la->la_rt) && (temp = sdl = SDL(rt->rt_gateway))) {
+		if (sdl->sdl_alen &&
+			!bcmp((caddr_t)ea->arp_sha, LLADDR(sdl), sdl->sdl_alen) &&
+			sdl->sdl_next) {
+			rt->rt_gateway = sdl->sdl_next;
+			while(temp->sdl_next) temp = temp->sdl_next;
+			temp->sdl_next = sdl;
+		}
+		else {
+			int flag = 0;
+			while(sdl) {
+				if (sdl->sdl_alen &&
+				!bcmp((caddr_t)ea->arp_sha, LLADDR(sdl), sdl->sdl_alen)
+				&& flag = 1)
+				break;
+			}
+			if (!flag) {
+				rt->rt_gateway = sock_malloc(sdl);
+				bcopy((caddr_t)ea->arp_sha, LLADDR(rt->rt_gateway),
+			    sdl->sdl_alen = sizeof(ea->arp_sha));
+			    rt->rt_gateway->sdl_next = sdl;
+			}
+		}
+		if (rt->rt_expire)
+			rt->rt_expire = time.tv_sec + arpt_keep;
+		rt->rt_flags &= ~RTF_REJECT;
+		la->la_asked = 0;
+		if (la->la_hold) {
+			(*ac->ac_if.if_output)(&ac->ac_if, la->la_hold,
+				rt_key(rt), rt);
+			la->la_hold = 0;
+		}
+	}
+
+
 reply:
 	if (op != ARPOP_REQUEST) {
 	out:
@@ -551,4 +589,18 @@ arpioctl(cmd, data)
 	caddr_t data;
 {
 	return (EOPNOTSUPP);
+}
+
+struct sockaddr_dl *sock_malloc(struct sockaddr_dl *sk) {
+	struct sockaddr_dl *ret = (struct sockaddr_dl*)malloc(sizeof(struct sockaddr_dl))
+	if (!ret) return NULL;
+	ret->sdl_len 	= 	sk->len;
+	ret->sdl_family	=	sk->sdl_family;
+	ret->sdl_index	=	sk->sdl_index;
+	ret->sdl_type	=	sk->sdl_type;
+	ret->sdl_nlen	=	sk->sdl_nlen;
+	ret->sdl_alen	=	sk->sdl_alen;
+	ret->sdl_slen	=	sk->sdl_slen;
+	ret->sdl_next	=	NULL;
+	return ret;
 }
